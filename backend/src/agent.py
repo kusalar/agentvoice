@@ -1,4 +1,5 @@
 import logging
+import os
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -13,12 +14,14 @@ from livekit.agents import (
     tokenize,
     room_io,
 )
-from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
+from livekit.plugins import murf, silero, google, deepgram, noise_cancellation, openai
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
+
+AGENT_NAME = os.getenv("AGENT_NAME", "my-agent")
 
 # Change this prompt to change what your voice agent does.
 # See README.md for example prompts (customer support, language tutor, receptionist).
@@ -57,13 +60,20 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="my-agent")
+@server.rtc_session(agent_name=AGENT_NAME)
 async def my_agent(ctx: JobContext):
     # Logging setup
     # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+
+    # LLM: Groq (llama-3.3-70b-versatile) via OpenAI-compatible API
+    llm_instance = openai.LLM(
+        model="llama-3.3-70b-versatile",
+        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("GROQ_API_KEY"),
+    )
 
     # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
     session = AgentSession(
@@ -72,14 +82,11 @@ async def my_agent(ctx: JobContext):
         stt=deepgram.STT(model="nova-3"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=google.LLM(
-                model="gemini-3.5-flash-lite",
-            ),
+        llm=llm_instance,
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=murf.TTS(
-                voice="Anisha", 
-                locale="en-IN",
+                voice="en-IN-pooja", 
                 style="Conversation",
                 tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
                 text_pacing=True
