@@ -25,30 +25,33 @@ load_dotenv(".env.local")
 AGENT_NAME = os.getenv("AGENT_NAME", "my-agent")
 
 # Change this prompt to change what your voice agent does.
-# See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are a friendly and efficient customer support agent for a tech company. Help users with account issues, billing questions, and product troubleshooting. Be concise, empathetic, and solution-oriented. If you don't know something, say so honestly and offer to escalate. Your responses are concise and without complex formatting, emojis, or symbols."""
+SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to help customers explore local products, check exact prices, verify stock availability, and answer questions about local market items.
+
+CRITICAL LANGUAGE MATCHING RULES:
+1. ALWAYS EXAMINE THE USER'S INPUT LANGUAGE AND REPLY IN THE EXACT SAME LANGUAGE:
+   - ENGLISH INPUT -> REPLY IN 100% ENGLISH ONLY. (Example: "What is the price of sourdough bread?" -> Reply in English).
+   - BENGALI INPUT (বাংলা / Banglish) -> REPLY IN 100% BENGALI ONLY (বাংলা). (Example: "ব্রেডের দাম কত?" or "bread er daam koto?" -> Reply in Bengali).
+   - HINDI INPUT (हिंदी / Hinglish) -> REPLY IN 100% HINDI ONLY (हिंदी). (Example: "ब्रेड का दाम कितना है?" or "bread ka daam kitna hai?" -> Reply in Hindi).
+2. DO NOT CROSS LANGUAGES. Never answer in Hindi if asked in Bengali or English. Never answer in Bengali if asked in English.
+3. Keep spoken replies polite, friendly, and concise. Do not use special markdown formatting or bullet points in spoken output.
+
+Here is your current Local Product Catalog & Price List:
+1. Fresh Organic Wildflower Honey (500g) — Price: ₹450 ($5.99) — Vendor: Local Apiary Farms — In Stock (Pure, raw, 100% natural organic honey).
+2. Handcrafted Sourdough Bread (750g) — Price: ₹220 ($2.99) — Vendor: Artisan Local Bakery — Baked Fresh Daily (Naturally fermented sourdough).
+3. Artisanal Roasted Coffee Beans (250g) — Price: ₹580 ($7.50) — Vendor: Mountain Roast Co. — In Stock (Single-origin medium roast, whole bean or ground).
+4. Handmade Ceramic Tea Mug (350ml) — Price: ₹350 ($4.50) — Vendor: Heritage Pottery Crafts — Limited Stock (Hand-painted pottery).
+5. Organic Cold-Pressed Coconut Oil (1 Litre) — Price: ₹650 ($8.25) — Vendor: Green Harvest Organics — In Stock (Pure unrefined extra virgin oil).
+6. Handwoven Cotton Tote Bag — Price: ₹399 ($4.99) — Vendor: EcoWeave Local — In Stock (100% eco-friendly organic cotton).
+
+Store Policies & Delivery:
+- Free same-day local delivery on orders above ₹499 ($6.00). Standard local delivery fee is ₹40 ($0.50).
+- Hours: Open 8:00 AM to 9:00 PM daily.
+- Return Policy: 7-day hassle-free exchange at any local partner store."""
 
 
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
-
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
 
 
 server = AgentServer()
@@ -64,14 +67,10 @@ server.setup_fnc = prewarm
 @server.rtc_session(agent_name=AGENT_NAME)
 async def my_agent(ctx: JobContext):
     # Logging setup
-    # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-        # LLM: Google (gemini-2.0-flash)
-    #llm_instance = google.LLM(
-    #   model="gemini-3.5-flash",
-    # LLM: Groq (llama-3.3-70b-versatile) via OpenAI-compatible API
+    # LLM: Groq (using Llama 3.3 70B via OpenAI-compatible endpoint)
     llm_instance = openai.LLM(
         model="llama-3.3-70b-versatile",
         base_url="https://api.groq.com/openai/v1",
@@ -82,18 +81,18 @@ async def my_agent(ctx: JobContext):
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=deepgram.STT(model="nova-3",language="multi"),
+        stt=deepgram.STT(model="nova-3", language="multi"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=llm_instance,
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=murf.TTS(
-                voice="hi-IN-anisha", 
-                style="Conversation",
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True
-            ),
+            voice="Anisha", 
+            style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True
+        ),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
@@ -109,27 +108,46 @@ async def my_agent(ctx: JobContext):
         if not transcript:
             return
 
-        # Check for Devanagari script characters (native Hindi)
-        has_devanagari = any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in transcript)
-
-        # Check for common Hinglish/Hindi romanized keywords
-        hindi_keywords = {
-            "kya", "hai", "aur", "main", "haan", "nahin", "aap", "namaste", "shukriya",
-            "yojana", "batao", "bataiye", "samjhao", "dhan", "suraksha", "bima", "pension",
-            "mein", "ke", "ki", "se", "ko", "ka", "jo", "toh", "bhi", "ho", "kar", "raha",
-            "rahi", "rha", "rhi", "mujhe", "mera", "meri", "hum", "tum", "apna", "apni",
-            "karke", "karo", "karna", "tha", "thi", "the", "ab", "kab", "tab", "sab"
-        }
-
         words = set(transcript.split())
+
+        # 1. Check Bengali script (Unicode U+0980 to U+09FF)
+        has_bengali_script = any(0x0980 <= ord(c) <= 0x09FF for c in transcript)
+        # Distinctive Bengali keywords (excluding common English words)
+        bengali_keywords = {
+            "kemon", "acho", "ami", "bhalo", "daam", "koto", "taka", "khobor", 
+            "dokan", "naam", "apni", "tumi", "dada", "didi", "korcho", "bhaio", 
+            "shono", "amake", "bolun", "chaie", "pabo", "achhe", "ache", "bangla"
+        }
+        has_bengali_words = not words.isdisjoint(bengali_keywords)
+
+        # 2. Check Devanagari script for Hindi (Unicode U+0900 to U+097F)
+        has_devanagari = any(0x0900 <= ord(c) <= 0x097F for c in transcript)
+        # Distinctive Hindi keywords (ONLY distinctive Hindi words, NO English words like 'the', 'is', 'in')
+        hindi_keywords = {
+            "namaste", "shukriya", "kya", "kaise", "kitna", "kitne", "batao", 
+            "bataiye", "samjhao", "dhan", "suraksha", "bima", "pension", 
+            "mujhe", "mera", "meri", "apna", "apni", "karna", "karo", "hindi", "hinglish"
+        }
         has_hindi_words = not words.isdisjoint(hindi_keywords)
 
-        if has_devanagari or has_hindi_words:
-            logger.info(f"Detected Hindi/Hinglish speech: '{ev.transcript}'. Switching TTS to hi-IN-anisha")
-            session.tts.update_options(voice="hi-IN-anisha")
+        if has_bengali_script or has_bengali_words:
+            logger.info(f"Detected Bengali speech: '{ev.transcript}'. Switching TTS voice to bn-IN-anisha")
+            try:
+                session.tts.update_options(voice="bn-IN-anisha")
+            except Exception as e:
+                logger.warning(f"Could not switch to Bengali TTS voice: {e}")
+        elif has_devanagari or has_hindi_words:
+            logger.info(f"Detected Hindi speech: '{ev.transcript}'. Switching TTS voice to hi-IN-anisha")
+            try:
+                session.tts.update_options(voice="hi-IN-anisha")
+            except Exception as e:
+                logger.warning(f"Could not switch to Hindi TTS voice: {e}")
         else:
-            logger.info(f"Detected English speech: '{ev.transcript}'. Switching TTS to en-IN-anisha")
-            session.tts.update_options(voice="en-IN-anisha")
+            logger.info(f"Detected English speech: '{ev.transcript}'. Switching TTS voice to en-IN-anisha")
+            try:
+                session.tts.update_options(voice="en-IN-anisha")
+            except Exception as e:
+                logger.warning(f"Could not switch to English TTS voice: {e}")
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
     # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))

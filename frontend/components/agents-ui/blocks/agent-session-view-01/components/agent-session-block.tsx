@@ -9,6 +9,8 @@ import {
   type AgentControlBarControls,
 } from '@/components/agents-ui/agent-control-bar';
 import { Shimmer } from '@/components/ai-elements/shimmer';
+import { SpeakerIndicator } from '@/components/app/speaker-indicator';
+import type { DisplayAgentState } from '@/hooks/useAgentState';
 import { cn } from '@/lib/shadcn/utils';
 import { TileLayout } from './tile-view';
 
@@ -151,6 +153,10 @@ export interface AgentSessionView_01Props {
   audioVisualizerRadialRadius?: number;
   /** Stroke width of the wave path when `audioVisualizerType` is `wave`. */
   audioVisualizerWaveLineWidth?: number;
+  /** Current display state of the agent */
+  displayState?: DisplayAgentState;
+  /** Optional device error handler */
+  onDeviceError?: (error: { source: any; error: Error }) => void;
   /** Optional class name merged onto the outer `<section>` container. */
   className?: string;
 }
@@ -171,6 +177,8 @@ export function AgentSessionView_01({
   audioVisualizerRadialBarCount,
   audioVisualizerRadialRadius,
   audioVisualizerWaveLineWidth,
+  displayState,
+  onDeviceError,
   ref,
   className,
   ...props
@@ -180,6 +188,9 @@ export function AgentSessionView_01({
   const [chatOpen, setChatOpen] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { state: agentState } = useAgent();
+
+  const activeSpeakerState: DisplayAgentState =
+    displayState || (agentState === 'speaking' ? 'speaking' : 'listening');
 
   const controls: AgentControlBarControls = {
     leave: true,
@@ -205,6 +216,11 @@ export function AgentSessionView_01({
       {...props}
     >
       <Fade top className="absolute inset-x-4 top-0 z-10 h-40" />
+
+      {/* Speaker Indicator Header */}
+      <div className="absolute top-4 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 px-4 md:top-6">
+        <SpeakerIndicator state={activeSpeakerState} />
+      </div>
       {/* transcript */}
 
       <div className="absolute top-0 bottom-[135px] flex w-full flex-col md:bottom-[170px]">
@@ -265,6 +281,7 @@ export function AgentSessionView_01({
             isChatOpen={chatOpen}
             isConnected={session.isConnected}
             onDisconnect={session.end}
+            onDeviceError={onDeviceError}
             onIsChatOpenChange={setChatOpen}
           />
         </div>
