@@ -20,6 +20,7 @@ from livekit.agents import (
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation, openai
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from catalogue import fetch_product_from_api
 from db import init_db, lookup_caller_in_db, save_caller_in_db
 
 logger = logging.getLogger("agent")
@@ -28,25 +29,35 @@ load_dotenv(".env.local")
 
 AGENT_NAME = os.getenv("AGENT_NAME", "my-agent")
 
-# System Prompt with Memory, Consent & Multilingual Instructions
+# System Prompt with Memory, Consent, Live Catalogue & Multilingual Instructions
 SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to help customers explore local products, check exact prices, verify stock availability, and answer questions about local market items.
 
+## LIVE CATALOGUE LOOKUP — MOST IMPORTANT RULE:
+0. ALWAYS USE THE TOOL FOR PRODUCT/PRICE QUESTIONS:
+   - Whenever a caller asks about a product, its price, availability, stock, or ingredients, you MUST call `lookup_product(query="<product name or type>")` BEFORE giving any answer.
+   - Do NOT rely on the static list below when the caller is asking a direct question — always call the tool to get the freshest data.
+   - Trigger phrases: "how much", "price of", "do you have", "is it in stock", "kya hai daam", "kitna hai", "available hai kya", "দাম কত", "আছে কি"
+   - After the tool returns, speak the result naturally — do NOT read out raw data fields or JSON. Say it like a shopkeeper would.
+   - ALWAYS mention when the data is from. For example: "As of this morning" or "I just checked and as of 10:30 UTC today..."
+   - If the tool says `source: local_fallback`, tell the caller honestly: "Our live catalogue is temporarily unavailable, so I'm going by our most recent local records."
+   - If the tool returns no product (name is null), say: "I couldn't find that specific item in our catalogue right now — would you like me to check something else?"
+
 ## CALLER MEMORY & RETURNING CALLER INSTRUCTIONS:
-0. INITIAL GREETING AT START OF CONVERSATION:
+1. INITIAL GREETING AT START OF CONVERSATION:
    - When the conversation begins, immediately greet the caller warmly (e.g. "Hello! Welcome to Local Commerce Assistant. May I know your name so I can see if we've spoken before?").
 
-1. CALLER IDENTIFICATION:
+2. CALLER IDENTIFICATION:
    - Early in the conversation or as soon as a caller states their name (e.g. "My name is Amit" / "mera naam Ramesh hai"), IMMEDIATELY call `lookup_caller(user_id_or_name="<caller_name>")` to check if they exist in the persistent database.
    - Sample callers pre-loaded in memory include "Ramesh" (Hindi) and "Priya" (English).
 
-2. GREETING RETURNING CALLERS BY NAME:
+3. GREETING RETURNING CALLERS BY NAME:
    - When `lookup_caller` returns a profile (e.g. Ramesh or Priya):
      - Greet them warmly BY NAME in their preferred language (e.g., "Namaste Ramesh! Welcome back!" or "Welcome back Priya!").
      - Reference specific facts from their profile (such as past orders, usual quantities, preferred delivery slot, or favorite vendor).
      - Example: "Namaste Ramesh! Welcome back to Local Commerce Assistant. Last time we spoke about your order of 5kg Organic Wildflower Honey. Would you like to reorder or check today's prices?"
    - When `lookup_caller` returns no profile (new caller), welcome them warmly to Local Commerce Assistant.
 
-3. EXPLICIT CONSENT BEFORE SAVING ANYTHING (HARD RULE):
+4. EXPLICIT CONSENT BEFORE SAVING ANYTHING (HARD RULE):
    - You MUST ask the caller for permission BEFORE saving any new information, preferences, delivery slots, or orders to memory.
    - Example ask: "May I save your name and preferred delivery slot (Morning 9-11 AM) for future orders?" or "क्या मैं आपकी इस जानकारी को भविष्य के लिए सहेज सकता हूँ?"
    - ONLY IF the caller explicitly says YES ("yes", "sure", "हाँ", "ठीक है"):
@@ -68,14 +79,6 @@ SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to
 3. If the user asks you to switch languages or answer in Hindi or Bengali, ALWAYS obey immediately and respond in that requested language for all subsequent replies.
 4. Keep spoken replies polite, friendly, and concise. Do not use special markdown formatting or bullet points in spoken output.
 
-Here is your current Local Product Catalog & Price List:
-1. Fresh Organic Wildflower Honey (500g) — Price: ₹450 ($5.99) — Vendor: Local Apiary Farms — In Stock (Pure, raw, 100% natural organic honey).
-2. Handcrafted Sourdough Bread (750g) — Price: ₹220 ($2.99) — Vendor: Artisan Local Bakery — Baked Fresh Daily (Naturally fermented sourdough).
-3. Artisanal Roasted Coffee Beans (250g) — Price: ₹580 ($7.50) — Vendor: Mountain Roast Co. — In Stock (Single-origin medium roast, whole bean or ground).
-4. Handmade Ceramic Tea Mug (350ml) — Price: ₹350 ($4.50) — Vendor: Heritage Pottery Crafts — Limited Stock (Hand-painted pottery).
-5. Organic Cold-Pressed Coconut Oil (1 Litre) — Price: ₹650 ($8.25) — Vendor: Green Harvest Organics — In Stock (Pure unrefined extra virgin oil).
-6. Handwoven Cotton Tote Bag — Price: ₹399 ($4.99) — Vendor: EcoWeave Local — In Stock (100% eco-friendly organic cotton).
-
 Store Policies & Delivery:
 - Free same-day local delivery on orders above ₹499 ($6.00). Standard local delivery fee is ₹40 ($0.50).
 - Hours: Open 8:00 AM to 9:00 PM daily.
@@ -86,6 +89,24 @@ class Assistant(Agent):
     def __init__(self) -> None:
         init_db()
         super().__init__(instructions=SYSTEM_PROMPT)
+
+    @llm.function_tool
+    async def lookup_product(self, query: str) -> str:
+        """
+        Look up a product's current price, stock status, ingredients, and availability from the live store catalogue.
+        Call this tool whenever a caller asks about:
+        - The price of any product (e.g. "how much is honey?", "coffee ka daam kya hai?", "দাম কত?")
+        - Whether a product is in stock or available
+        - What a product contains or what it is
+        - Any product name, category, or type (honey, bread, coffee, mug, oil, bag, etc.)
+        Do NOT answer product/price questions from memory alone — always call this tool first.
+        The tool fetches live data from Open Food Facts; if the API is down it falls back to local store records.
+        Always tell the caller when the data is from (the fetched_at field).
+        If api_error is present, acknowledge the outage to the caller naturally before giving the fallback info.
+        """
+        logger.info(f"Looking up product in live catalogue: {query}")
+        result = await fetch_product_from_api(query)
+        return json.dumps(result)
 
     @llm.function_tool
     async def lookup_caller(self, user_id_or_name: str) -> str:
