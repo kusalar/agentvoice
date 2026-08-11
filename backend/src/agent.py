@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -21,7 +22,13 @@ from livekit.plugins import murf, silero, google, deepgram, noise_cancellation, 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from catalogue import fetch_product_from_api
-from db import init_db, lookup_caller_in_db, save_caller_in_db
+from db import (
+    init_db,
+    is_caller_opted_out,
+    lookup_caller_in_db,
+    opt_out_caller,
+    save_caller_in_db,
+)
 
 logger = logging.getLogger("agent")
 
@@ -29,8 +36,18 @@ load_dotenv(".env.local")
 
 AGENT_NAME = os.getenv("AGENT_NAME", "my-agent")
 
-# System Prompt with Memory, Consent, Live Catalogue & Multilingual Instructions
-SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to help customers explore local products, check exact prices, verify stock availability, and answer questions about local market items.
+# System Prompt with Memory, Consent, Live Catalogue, Multilingual & Outbound Instructions
+SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to help customers explore local products, check exact prices, verify stock availability, and handle order confirmations and restock nudges.
+
+## OUTBOUND CALL & CALL OPENING INSTRUCTIONS (DAY 6 REQUIREMENT):
+1. PROPER OUTBOUND OPENING (HARD RULE):
+   - When an outbound call connects, your VERY FIRST TWO SENTENCES must state:
+     - Sentence 1 (Who & Why): Say who is calling and why (e.g. "Hello! This is Local Commerce Assistant calling regarding your regular restock order for Organic Wildflower Honey based on your past order rhythm.")
+     - Sentence 2 (How to stop): Say how to make it stop (e.g. "If you don't wish to receive these restock call reminders, just say 'stop calling me' or 'opt out' at any time.")
+2. OPT-OUT HANDLING (HARD RULE):
+   - Whenever the caller says "stop", "stop calling me", "opt out", "remove me", "don't call", or asks to stop receiving calls:
+     a) FIRST IMMEDIATELY call `opt_out_user(user_id_or_name="ramesh_01")`.
+     b) THEN respond verbally: "Understood! I have updated your account and removed you from all future restock calls. Have a great day!"
 
 ## LIVE CATALOGUE LOOKUP — MOST IMPORTANT RULE:
 0. ALWAYS USE THE TOOL FOR PRODUCT/PRICE QUESTIONS:
@@ -43,46 +60,32 @@ SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to
    - If the tool returns no product (name is null), say: "I couldn't find that specific item in our catalogue right now — would you like me to check something else?"
 
 ## CALLER MEMORY & RETURNING CALLER INSTRUCTIONS:
-1. INITIAL GREETING AT START OF CONVERSATION:
-   - When the conversation begins, immediately greet the caller warmly (e.g. "Hello! Welcome to Local Commerce Assistant. May I know your name so I can see if we've spoken before?").
-
-2. CALLER IDENTIFICATION:
-   - Early in the conversation or as soon as a caller states their name (e.g. "My name is Amit" / "mera naam Ramesh hai"), IMMEDIATELY call `lookup_caller(user_id_or_name="<caller_name>")` to check if they exist in the persistent database.
+1. CALLER IDENTIFICATION:
+   - Early in the conversation or as soon as a caller states their name (e.g. "My name is Ramesh"), call `lookup_caller(user_id_or_name="<caller_name>")` to check if they exist in the persistent database.
    - Sample callers pre-loaded in memory include "Ramesh" (Hindi) and "Priya" (English).
 
-3. GREETING RETURNING CALLERS BY NAME:
+2. GREETING RETURNING CALLERS BY NAME:
    - When `lookup_caller` returns a profile (e.g. Ramesh or Priya):
-     - Greet them warmly BY NAME in their preferred language (e.g., "Namaste Ramesh! Welcome back!" or "Welcome back Priya!").
-     - Reference specific facts from their profile (such as past orders, usual quantities, preferred delivery slot, or favorite vendor).
+     - Reference specific facts from their profile (such as past orders, usual quantities, preferred delivery slot).
      - Example: "Namaste Ramesh! Welcome back to Local Commerce Assistant. Last time we spoke about your order of 5kg Organic Wildflower Honey. Would you like to reorder or check today's prices?"
-   - When `lookup_caller` returns no profile (new caller), welcome them warmly to Local Commerce Assistant.
 
-4. EXPLICIT CONSENT BEFORE SAVING ANYTHING (HARD RULE):
+3. EXPLICIT CONSENT BEFORE SAVING ANYTHING (HARD RULE):
    - You MUST ask the caller for permission BEFORE saving any new information, preferences, delivery slots, or orders to memory.
-   - Example ask: "May I save your name and preferred delivery slot (Morning 9-11 AM) for future orders?" or "क्या मैं आपकी इस जानकारी को भविष्य के लिए सहेज सकता हूँ?"
    - ONLY IF the caller explicitly says YES ("yes", "sure", "हाँ", "ठीक है"):
      - IMMEDIATELY call `save_caller_memory(user_id="<caller_name_id>", name="<caller_name>", has_user_consent=True, fact_key="...", fact_value="...")`.
-     - Confirm to the caller that their details have been saved in memory.
    - IF the caller says NO ("no", "don't save", "नहीं"):
-     - DO NOT save anything! You may call `save_caller_memory(..., has_user_consent=False)` or skip calling it.
-     - Inform the caller politely: "Understood, I will not save this information."
-   - Saving caller information without explicit user consent is STRICTLY PROHIBITED.
+     - DO NOT save anything!
 
 ### CRITICAL MULTILINGUAL & LANGUAGE MATCHING RULES:
 1. ALWAYS DETECT AND MATCH THE USER'S DESIRED LANGUAGE:
-   - If the user speaks or asks to speak in HINDI (e.g. "हिंदी में बोलो", "talk in hindi", "speak in hindi", "hindi mein batao"): IMMEDIATELY reply in 100% HINDI using Devanagari script (नमस्ते! मैं आपकी क्या सहायता कर सकता हूँ?).
-   - If the user speaks or asks to speak in BENGALI (e.g. "বাংলায় বলুন", "talk in bengali", "speak in bengali", "bangla te bolo"): IMMEDIATELY reply in 100% BENGALI using Bengali script (নমস্কার! আমি আপনাকে কীভাবে সাহায্য করতে পারি?).
+   - If the user speaks or asks to speak in HINDI: reply in HINDI using Devanagari script.
+   - If the user speaks or asks to speak in BENGALI: reply in BENGALI using Bengali script.
    - If the user speaks in ENGLISH: Reply in ENGLISH.
-2. SCRIPT REQUIREMENT:
-   - Always write Hindi in Devanagari script (नमस्ते), never romanized.
-   - Always write Bengali in Bengali script (নমস্কার), never romanized.
-3. If the user asks you to switch languages or answer in Hindi or Bengali, ALWAYS obey immediately and respond in that requested language for all subsequent replies.
-4. Keep spoken replies polite, friendly, and concise. Do not use special markdown formatting or bullet points in spoken output.
+2. Keep spoken replies polite, friendly, and concise.
 
 Store Policies & Delivery:
 - Free same-day local delivery on orders above ₹499 ($6.00). Standard local delivery fee is ₹40 ($0.50).
-- Hours: Open 8:00 AM to 9:00 PM daily.
-- Return Policy: 7-day hassle-free exchange at any local partner store."""
+- Hours: Open 8:00 AM to 9:00 PM daily."""
 
 
 class Assistant(Agent):
@@ -94,15 +97,6 @@ class Assistant(Agent):
     async def lookup_product(self, query: str) -> str:
         """
         Look up a product's current price, stock status, ingredients, and availability from the live store catalogue.
-        Call this tool whenever a caller asks about:
-        - The price of any product (e.g. "how much is honey?", "coffee ka daam kya hai?", "দাম কত?")
-        - Whether a product is in stock or available
-        - What a product contains or what it is
-        - Any product name, category, or type (honey, bread, coffee, mug, oil, bag, etc.)
-        Do NOT answer product/price questions from memory alone — always call this tool first.
-        The tool fetches live data from Open Food Facts; if the API is down it falls back to local store records.
-        Always tell the caller when the data is from (the fetched_at field).
-        If api_error is present, acknowledge the outage to the caller naturally before giving the fallback info.
         """
         logger.info(f"Looking up product in live catalogue: {query}")
         result = await fetch_product_from_api(query)
@@ -111,8 +105,7 @@ class Assistant(Agent):
     @llm.function_tool
     async def lookup_caller(self, user_id_or_name: str) -> str:
         """
-        Look up a caller's details, language preference, and saved facts (such as past orders, usual quantities, preferred delivery slot) using their name or user ID.
-        Call this function whenever the caller states their name or asks about their past history.
+        Look up a caller's details, language preference, and saved facts using their name or user ID.
         """
         logger.info(f"Looking up caller in database: {user_id_or_name}")
         caller_data = lookup_caller_in_db(user_id_or_name)
@@ -131,10 +124,7 @@ class Assistant(Agent):
         fact_value: str = "",
     ) -> str:
         """
-        Save or update a caller's profile and facts in the persistent SQLite database.
-        IMPORTANT RULES:
-        1. Always pass the caller's actual name as the `name` parameter.
-        2. HARD RULE: You MUST ask the caller for permission BEFORE calling this tool and set `has_user_consent=True` ONLY IF the caller explicitly agrees.
+        Save or update a caller's profile and facts in the persistent SQLite database after explicit consent.
         """
         logger.info(f"save_caller_memory invoked for name='{name}', user_id='{user_id}' with consent={has_user_consent}")
         result = save_caller_in_db(
@@ -145,6 +135,16 @@ class Assistant(Agent):
             fact_value=fact_value,
             has_user_consent=has_user_consent,
         )
+        return json.dumps(result)
+
+    @llm.function_tool
+    async def opt_out_user(self, user_id_or_name: str = "ramesh_01") -> str:
+        """
+        Opt out a caller from receiving future outbound calls.
+        Call this tool whenever a caller says 'stop', 'opt out', 'remove me', 'stop calling me', 'don't call', or wants to cancel call reminders.
+        """
+        logger.info(f"Opting out caller from outbound calls: {user_id_or_name}")
+        result = opt_out_caller(user_id_or_name)
         return json.dumps(result)
 
 
@@ -246,7 +246,19 @@ async def my_agent(ctx: JobContext):
 
     await ctx.connect()
 
-    # Automatically trigger initial greeting when the user joins
+    # Wait for the customer/SIP participant to join/answer the call
+    try:
+        logger.info("Waiting for participant to connect...")
+        await ctx.wait_for_participant()
+        logger.info("Participant connected to room.")
+    except Exception as e:
+        logger.warning(f"Wait for participant warning: {e}")
+
+    # Brief delay so audio pipeline is open on the user's phone
+    await asyncio.sleep(1.0)
+
+    # Trigger initial outbound greeting
+    logger.info("Generating initial outbound greeting...")
     await session.generate_reply()
 
 

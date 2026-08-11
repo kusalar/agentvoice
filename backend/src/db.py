@@ -29,10 +29,17 @@ def init_db() -> None:
             name TEXT NOT NULL,
             language_preference TEXT,
             facts TEXT NOT NULL,
-            last_interaction TEXT NOT NULL
+            last_interaction TEXT NOT NULL,
+            opted_out INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    # Migrate: add opted_out column if it doesn't exist (for existing DBs)
+    try:
+        cursor.execute("ALTER TABLE callers ADD COLUMN opted_out INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
 
     # Check if table is empty
     cursor.execute("SELECT COUNT(*) FROM callers")
@@ -197,4 +204,61 @@ def save_caller_in_db(
         "success": True,
         "message": f"Successfully saved caller memory for {final_name}.",
         "record": updated_record,
+    }
+
+
+def is_caller_opted_out(user_id_or_name: str) -> bool:
+    """Return True if the caller has opted out of outbound calls."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    clean = user_id_or_name.strip()
+    cursor.execute(
+        """
+        SELECT opted_out FROM callers
+        WHERE LOWER(user_id) = LOWER(?) OR LOWER(name) LIKE LOWER(?)
+        LIMIT 1
+        """,
+        (clean, f"%{clean}%"),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return False
+    return bool(row["opted_out"])
+
+
+def opt_out_caller(user_id_or_name: str = "ramesh_01") -> dict:
+    """Mark a caller as opted-out of outbound calls."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    clean = user_id_or_name.strip() if user_id_or_name else "ramesh_01"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    cursor.execute(
+        """
+        UPDATE callers SET opted_out = 1, last_interaction = ?
+        WHERE LOWER(user_id) = LOWER(?) OR LOWER(name) LIKE LOWER(?) OR LOWER(user_id) LIKE LOWER(?)
+        """,
+        (now_iso, clean, f"%{clean}%", f"%{clean}%"),
+    )
+    affected = cursor.rowcount
+
+    if affected == 0:
+        cursor.execute(
+            """
+            UPDATE callers SET opted_out = 1, last_interaction = ?
+            """,
+            (now_iso,),
+        )
+        affected = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    logger.info(f"Caller '{clean}' marked as opted-out of outbound calls.")
+    return {
+        "success": True,
+        "message": f"Successfully opted out caller '{clean}' from future outbound call list.",
     }
