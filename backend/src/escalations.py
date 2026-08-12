@@ -62,7 +62,8 @@ def _sanitize_pii(text: str) -> str:
 
 def _gen_ref_id() -> str:
     """Generate ESC-YYYYMMDD-XXXX format reference ID."""
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    IST = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.now(IST).strftime("%Y%m%d")
     suffix = random.randint(1000, 9999)
     return f"ESC-{today}-{suffix}"
 
@@ -118,7 +119,8 @@ def find_open_duplicate(caller_name: str, issue_type: str) -> dict[str, Any] | N
     init_escalations_db()
     conn = _get_connection()
     cursor = conn.cursor()
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    IST = timezone(timedelta(hours=5, minutes=30))
+    cutoff = (datetime.now(IST) - timedelta(hours=24)).isoformat()
     cursor.execute(
         """
         SELECT * FROM escalations
@@ -166,7 +168,8 @@ def create_escalation(
     clean_urgency = urgency.lower() if urgency.lower() in URGENCY_LEVELS else "medium"
     clean_issue = issue_type if issue_type in ISSUE_TYPES else "other"
 
-    now = datetime.now(timezone.utc).isoformat()
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST).isoformat()
 
     # Check for duplicate
     existing = find_open_duplicate(clean_name, clean_issue)
@@ -275,7 +278,8 @@ def update_escalation_status(ref_id: str, new_status: str) -> dict[str, Any]:
     init_escalations_db()
     conn = _get_connection()
     cursor = conn.cursor()
-    now = datetime.now(timezone.utc).isoformat()
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST).isoformat()
 
     resolved_at = now if new_status == "resolved" else None
     cursor.execute(

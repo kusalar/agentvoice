@@ -74,6 +74,44 @@ def seed_demo_data():
     )
     print(f"  Created (open):       {r3['ref_id']} — Arjun, pending refund")
 
+    # --- Adjust timestamps to be different and realistic ---
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST)
+    conn = sqlite3.connect(ESC_DB_PATH)
+    
+    # Ticket 1 (resolved): Created 2 days ago, updated 1.5 days ago, resolved 2 hours ago
+    conn.execute(
+        "UPDATE escalations SET created_at=?, updated_at=?, resolved_at=? WHERE ref_id=?",
+        (
+            (now - timedelta(days=2)).isoformat(),
+            (now - timedelta(hours=2)).isoformat(), # The last update was when it was resolved
+            (now - timedelta(hours=2)).isoformat(),
+            r1["ref_id"]
+        )
+    )
+
+    # Ticket 2 (in_progress): Created 1 day ago, updated 4 hours ago
+    conn.execute(
+        "UPDATE escalations SET created_at=?, updated_at=? WHERE ref_id=?",
+        (
+            (now - timedelta(days=1)).isoformat(),
+            (now - timedelta(hours=4)).isoformat(),
+            r2["ref_id"]
+        )
+    )
+
+    # Ticket 3 (open): Created 1 hour ago
+    conn.execute(
+        "UPDATE escalations SET created_at=?, updated_at=? WHERE ref_id=?",
+        (
+            (now - timedelta(hours=1)).isoformat(),
+            (now - timedelta(hours=1)).isoformat(),
+            r3["ref_id"]
+        )
+    )
+    conn.commit()
+    conn.close()
+
     print(f"\nDB path: {ESC_DB_PATH}")
     print("\nDashboard is ready! Open http://localhost:3000/escalations")
     return r3["ref_id"]  # Return the OPEN ticket — this is the one we'll 'create' live in the demo
