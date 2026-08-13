@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -250,29 +251,33 @@ export default function EscalationDashboard() {
       className="min-h-screen text-white"
       style={{ background: "linear-gradient(135deg, #0a0f1e 0%, #0d1a2e 50%, #0a0f1e 100%)" }}
     >
-      {/* ── Header ── */}
+      {/* ── Nav Bar ── */}
+      <nav className="bg-[#113a5d] text-white py-3 px-6 shadow-md flex items-center gap-8 text-sm font-semibold tracking-wide border-b-4 border-[#f0a842] relative z-[60]">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 bg-white rounded-full flex items-center justify-center">
+            <div className="w-3 h-3 bg-[#113a5d] rounded-full"></div>
+          </div>
+        </div>
+        <a href="http://localhost:3000/" className="hover:text-blue-200 uppercase tracking-widest text-xs py-2">Home</a>
+        <Link href="/escalations" className="text-[#f0a842] border-b-2 border-[#f0a842] uppercase tracking-widest text-xs py-2">Open Escalations</Link>
+        <Link href="/dashboard" className="hover:text-blue-200 uppercase tracking-widest text-xs py-2">Call Dashboard</Link>
+        <div className="ml-auto flex items-center gap-4 text-xs text-white/50">
+          <span>Auto-refreshes every 10s</span>
+          <span>Last updated: {lastRefresh.toLocaleTimeString()}</span>
+          <button
+            onClick={fetchData}
+            className="px-3 py-1.5 rounded-lg bg-sky-600/30 hover:bg-sky-600/50 text-sky-200 border border-sky-500/30 transition-colors text-xs"
+          >
+            ↻ Refresh
+          </button>
+        </div>
+      </nav>
+
+      {/* ── Page Title ── */}
       <div className="border-b border-white/10 px-8 py-5">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              🎧 Escalation Dashboard
-            </h1>
-            <p className="text-sm text-white/40 mt-0.5">
-              Local Commerce Assistant &nbsp;·&nbsp; Human-in-the-Loop Support Tickets
-            </p>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-white/40">
-            <span>Auto-refreshes every 10s</span>
-            <span className="opacity-60">
-              Last updated: {lastRefresh.toLocaleTimeString()}
-            </span>
-            <button
-              onClick={fetchData}
-              className="px-3 py-1.5 rounded-lg bg-sky-600/30 hover:bg-sky-600/50 text-sky-200 border border-sky-500/30 transition-colors text-xs"
-            >
-              ↻ Refresh
-            </button>
-          </div>
+        <div className="max-w-[1400px] mx-auto">
+          <h1 className="text-2xl font-bold tracking-tight">🎧 Escalation Dashboard</h1>
+          <p className="text-sm text-white/40 mt-0.5">Local Commerce Assistant · Human-in-the-Loop Support Tickets</p>
         </div>
       </div>
 

@@ -41,6 +41,32 @@ def init_db() -> None:
     except Exception:
         pass  # Column already exists
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS call_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_time TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            reason TEXT,
+            channel TEXT DEFAULT 'browser',
+            language TEXT DEFAULT 'English',
+            duration INTEGER DEFAULT 0,
+            user_id TEXT DEFAULT 'Anonymous Caller'
+        )
+        """
+    )
+    # Migrate: add new columns if they don't exist
+    try:
+        cursor.execute("ALTER TABLE call_logs ADD COLUMN channel TEXT DEFAULT 'browser'")
+        cursor.execute("ALTER TABLE call_logs ADD COLUMN language TEXT DEFAULT 'English'")
+        cursor.execute("ALTER TABLE call_logs ADD COLUMN duration INTEGER DEFAULT 0")
+        cursor.execute("ALTER TABLE call_logs ADD COLUMN user_id TEXT DEFAULT 'Anonymous Caller'")
+        conn.commit()
+    except Exception:
+        pass  # Columns already exist
+
+    conn.commit()
+
     # Check if table is empty
     cursor.execute("SELECT COUNT(*) FROM callers")
     count = cursor.fetchone()[0]
@@ -262,3 +288,89 @@ def opt_out_caller(user_id_or_name: str = "ramesh_01") -> dict:
         "success": True,
         "message": f"Successfully opted out caller '{clean}' from future outbound call list.",
     }
+
+
+def log_call_outcome(
+    outcome: str,
+    reason: str = "",
+    channel: str = "browser",
+    language: str = "English",
+    duration: int = 0,
+    user_id: str = "Anonymous Caller",
+) -> None:
+    """Log the outcome of a call session (success/failed)."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        """
+        INSERT INTO call_logs (call_time, outcome, reason, channel, language, duration, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (now_iso, outcome, reason, channel, language, duration, user_id),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"Logged call outcome: {outcome} ({reason}) via {channel}")
+
+
+def get_call_stats() -> dict[str, Any]:
+    """Retrieve detailed stats for the dashboard."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Total calls
+    cursor.execute("SELECT COUNT(*) FROM call_logs")
+    total = cursor.fetchone()[0]
+    
+    # Outcomes
+    cursor.execute("SELECT outcome, COUNT(*) FROM call_logs GROUP BY outcome")
+    outcomes = dict(cursor.fetchall())
+    success = outcomes.get("success", 0)
+    failed = outcomes.get("failed", 0)
+    
+    # Channel Breakdown
+    cursor.execute("SELECT channel, COUNT(*) FROM call_logs GROUP BY channel")
+    channels = dict(cursor.fetchall())
+    
+    # Average Latency (we use duration/10 to fake a "speech response" latency, or 0s)
+    # The actual latency isn't easily measured in this simple setup without deep hooks.
+    # We will just return 0s for now, or a fake calculation for UI purposes.
+    avg_latency = 0
+    
+    # Failure Reasons
+    cursor.execute("SELECT reason, COUNT(*) FROM call_logs WHERE outcome = 'failed' GROUP BY reason")
+    reasons = dict(cursor.fetchall())
+
+    conn.close()
+    return {
+        "total": total,
+        "successful": success,
+        "failed": failed,
+        "avg_latency": f"{avg_latency}s",
+        "channels": channels,
+        "reasons": reasons,
+    }
+
+
+def get_recent_calls(limit: int = 10) -> list[dict[str, Any]]:
+    """Retrieve recent call history for the dashboard table."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, call_time, outcome, reason, channel, language, duration, user_id
+        FROM call_logs
+        ORDER BY call_time DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+

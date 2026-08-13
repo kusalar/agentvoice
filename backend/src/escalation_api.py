@@ -31,6 +31,7 @@ from escalations import (
     list_escalations,
     update_escalation_status,
 )
+from db import get_call_stats, get_recent_calls
 
 logger = logging.getLogger("escalation_api")
 logging.basicConfig(level=logging.INFO)
@@ -99,6 +100,18 @@ def get_stats():
         if u in stats["by_urgency"]:
             stats["by_urgency"][u] += 1
     return stats
+
+
+@app.get("/api/calls/stats")
+def get_call_statistics():
+    """Return counts of total, successful, and failed calls."""
+    return get_call_stats()
+
+
+@app.get("/api/calls/history")
+def get_call_history(limit: int = Query(default=10, le=100)):
+    """Retrieve recent call history."""
+    return get_recent_calls(limit=limit)
 
 
 @app.get("/api/escalations")

@@ -28,6 +28,7 @@ from db import (
     lookup_caller_in_db,
     opt_out_caller,
     save_caller_in_db,
+    log_call_outcome,
 )
 from escalations import (
     build_caller_summary,
@@ -166,6 +167,24 @@ class Assistant(Agent):
         init_db()
         init_escalations_db()
         super().__init__(instructions=SYSTEM_PROMPT)
+        self.call_outcome = "failed"
+        self.call_reason = "Incomplete Task"
+        self.start_time = asyncio.get_event_loop().time()
+        self.language = "English"
+        self.caller_user_id = "Anonymous Caller"
+        self.caller_channel = "browser"
+
+
+    @llm.function_tool
+    async def mark_call_successful(self, reason: str) -> str:
+        """
+        Call this tool when you have successfully helped the caller (e.g. they found a product, completed an enquiry, or successfully opted out).
+        Do this right before ending the call or saying goodbye.
+        """
+        logger.info(f"Marking call as successful: {reason}")
+        self.call_outcome = "success"
+        self.call_reason = reason
+        return "Call marked as successful."
 
     @llm.function_tool
     async def lookup_product(self, query: str) -> str:
@@ -333,6 +352,7 @@ async def my_agent(ctx: JobContext):
         api_key=os.getenv("GOOGLE_API_KEY"),
     )
 
+    assistant = Assistant()
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=llm_instance,
@@ -375,25 +395,28 @@ async def my_agent(ctx: JobContext):
 
         if has_bengali_script or has_bengali_words:
             logger.info(f"Detected Bengali intent: '{ev.transcript}'. Updating TTS locale to bn-IN")
+            assistant.language = "Bengali"
             try:
                 session.tts.update_options(locale="bn-IN")
             except Exception as e:
                 logger.warning(f"Could not switch to Bengali TTS locale: {e}")
         elif has_devanagari or has_hindi_words:
             logger.info(f"Detected Hindi intent: '{ev.transcript}'. Updating TTS locale to hi-IN")
+            assistant.language = "Hindi"
             try:
                 session.tts.update_options(locale="hi-IN")
             except Exception as e:
                 logger.warning(f"Could not switch to Hindi TTS locale: {e}")
         else:
             logger.info(f"Detected English speech: '{ev.transcript}'. Updating TTS locale to en-IN")
+            assistant.language = "English"
             try:
                 session.tts.update_options(locale="en-IN")
             except Exception as e:
                 logger.warning(f"Could not switch to English TTS locale: {e}")
 
     await session.start(
-        agent=Assistant(),
+        agent=assistant,
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
@@ -406,6 +429,43 @@ async def my_agent(ctx: JobContext):
             ),
         ),
     )
+
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant: rtc.RemoteParticipant):
+        """Capture caller identity and channel when they join — before disconnect clears the list."""
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            assistant.caller_channel = "sip"
+            assistant.caller_user_id = participant.identity or "SIP Caller"
+        elif participant.identity:
+            assistant.caller_channel = "browser"
+            assistant.caller_user_id = participant.identity
+        logger.info(f"Participant joined: identity={participant.identity}, kind={participant.kind}, channel={assistant.caller_channel}")
+
+    @ctx.room.on("disconnected")
+    def on_disconnect(*args, **kwargs):
+        duration = int(asyncio.get_event_loop().time() - assistant.start_time)
+        # Use identity captured at join time via participant_connected event
+        # (ctx.room.remote_participants is empty by the time disconnected fires)
+        channel = assistant.caller_channel
+        user_id = assistant.caller_user_id
+
+        # Final fallback: job metadata
+        if user_id == "Anonymous Caller":
+            try:
+                meta = json.loads(ctx.job.metadata or "{}")
+                user_id = meta.get("user_id") or meta.get("caller_id") or "Anonymous Caller"
+            except Exception:
+                pass
+
+        logger.info(f"Room disconnected. Logging call outcome: {assistant.call_outcome}, {duration}s, {channel}, user={user_id}")
+        log_call_outcome(
+            outcome=assistant.call_outcome,
+            reason=assistant.call_reason,
+            channel=channel,
+            language=assistant.language,
+            duration=duration,
+            user_id=user_id
+        )
 
     await ctx.connect()
 
