@@ -2,7 +2,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, type MotionProps, motion } from 'motion/react';
-import { useAgent, useSessionContext, useSessionMessages } from '@livekit/components-react';
+import { useAgent, useSessionContext, useSessionMessages, useDataChannel } from '@livekit/components-react';
+import type { ReceivedMessage } from '@livekit/components-react';
 import { AgentChatTranscript } from '@/components/agents-ui/agent-chat-transcript';
 import {
   AgentControlBar,
@@ -185,6 +186,31 @@ export function AgentSessionView_01({
 }: React.ComponentProps<'section'> & AgentSessionView_01Props) {
   const session = useSessionContext();
   const { messages } = useSessionMessages(session);
+  const [extraMessages, setExtraMessages] = useState<ReceivedMessage[]>([]);
+  const { message: dataChannelMessage } = useDataChannel('chat');
+
+  useEffect(() => {
+    if (dataChannelMessage) {
+      try {
+        const data = JSON.parse(new TextDecoder().decode(dataChannelMessage.payload));
+        if (data.type === 'specialist_joined' || data.type === 'specialist_left') {
+          setExtraMessages((prev) => [
+            ...prev,
+            {
+              id: `sys-${Date.now()}`,
+              timestamp: Date.now(),
+              message: data.message,
+            } as ReceivedMessage,
+          ]);
+        }
+      } catch (e) {
+        console.error('Failed to parse data channel message', e);
+      }
+    }
+  }, [dataChannelMessage]);
+
+  const allMessages = [...messages, ...extraMessages].sort((a, b) => a.timestamp - b.timestamp);
+
   const [chatOpen, setChatOpen] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { state: agentState } = useAgent();
@@ -232,7 +258,7 @@ export function AgentSessionView_01({
             >
               <AgentChatTranscript
                 agentState={agentState}
-                messages={messages}
+                messages={allMessages}
                 className="mx-auto w-full max-w-2xl [&_.is-user>div]:rounded-[22px] [&>div>div]:px-4 [&>div>div]:pt-40 md:[&>div>div]:px-6"
               />
             </motion.div>

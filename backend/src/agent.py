@@ -93,15 +93,15 @@ SYSTEM_PROMPT = """You are the official Local Commerce Assistant. Your job is to
 
 ### WHEN TO ESCALATE (Two Trigger Situations):
 
-TRIGGER 1 — PAYMENT / REFUND DISPUTE:
-   Escalate when the caller says ANY of:
+TRIGGER 1 — PAYMENT / REFUND DISPUTE & RETURNS:
+   When the caller says ANY of:
    - "I was charged twice" / "double charge" / "charged incorrectly"
    - "I want a refund" / "refund nahi mila" / "paise wapas"
+   - "I want to return an item" / "return karna hai"
    - "payment failed but money deducted" / "transaction dispute"
    - "I didn't receive my refund" / "refund pending"
-   → Set issue_type = "payment_refund"
-   → Default urgency = "high"
-   → Emergency if amount is large (>₹5000 mentioned) or caller seems very distressed
+   → Call `transfer_to_returns_specialist` IMMEDIATELY after telling them you are transferring them.
+   → DO NOT use create_escalation for these issues.
 
 TRIGGER 2 — ORDER COMPLAINT:
    Escalate when the caller says ANY of:
@@ -162,6 +162,14 @@ Store Policies & Delivery:
 - Hours: Open 8:00 AM to 9:00 PM daily."""
 
 
+RETURNS_SPECIALIST_PROMPT = """You are Karan, the Returns and Refunds Specialist.
+Your sole job is to help customers process returns, track refunds, and resolve payment disputes.
+You have access to the full conversation history. 
+When you first take over, you MUST introduce yourself as Karan and ask how you can help them with their specific issue based on the conversation history.
+Be extremely polite, empathetic, and clear.
+When you have finished helping them with their return, refund, or payment issue, OR if they change the topic to something else (like general queries or catalogue), you MUST call the `transfer_to_main_agent` tool to hand them back to the main assistant.
+"""
+
 class Assistant(Agent):
     def __init__(self) -> None:
         init_db()
@@ -173,7 +181,41 @@ class Assistant(Agent):
         self.language = "English"
         self.caller_user_id = "Anonymous Caller"
         self.caller_channel = "browser"
-
+        self.agent_session = None
+    @llm.function_tool
+    async def transfer_to_returns_specialist(self) -> str:
+        """
+        Use this tool to transfer the conversation to the Returns and Refunds Specialist.
+        Call this tool ONLY AFTER you have explicitly told the user that you are connecting them to the returns specialist.
+        Use this when the user's request is about returns, refunds, or payment disputes.
+        """
+        logger.info("Transferring to Returns Specialist")
+        if getattr(self, "agent_session", None):
+            specialist = ReturnsSpecialist()
+            specialist.agent_session = self.agent_session
+            self.agent_session.update_agent(specialist)
+            # Add a system message to ensure the new agent introduces itself
+            self.agent_session.history.add_message(
+                role="system",
+                content="You have just taken over the conversation. Introduce yourself as Karan, the Returns and Refunds Specialist, and address the user's last request."
+            )
+            try:
+                self.agent_session.tts.update_options(voice="Karan")
+            except Exception as e:
+                logger.warning(f"Could not switch TTS voice: {e}")
+                
+            try:
+                from livekit.agents import get_job_context
+                ctx = get_job_context()
+                await ctx.room.local_participant.publish_data(
+                    payload=json.dumps({"type": "specialist_joined", "message": "specialist joined the chat"}).encode("utf-8"),
+                    topic="chat"
+                )
+            except Exception as e:
+                logger.error(f"Error publishing specialist joined data: {e}")
+                
+            return "Transferred to Returns Specialist successfully. Please take over and respond to the user."
+        return "Failed to transfer."
 
     @llm.function_tool
     async def mark_call_successful(self, reason: str) -> str:
@@ -330,6 +372,49 @@ class Assistant(Agent):
         })
 
 
+class ReturnsSpecialist(Assistant):
+    def __init__(self) -> None:
+        super().__init__()
+        self._instructions = RETURNS_SPECIALIST_PROMPT
+
+    @llm.function_tool
+    async def transfer_to_main_agent(self) -> str:
+        """
+        Use this tool to transfer the conversation back to the main Local Commerce Assistant.
+        Call this tool ONLY AFTER you have explicitly told the user that you are connecting them back to the main assistant.
+        Use this when you have finished resolving their issue or they change the topic to a general store query.
+        """
+        logger.info("Transferring back to Main Assistant")
+        if getattr(self, "agent_session", None):
+            main_agent = Assistant()
+            main_agent.agent_session = self.agent_session
+            self.agent_session.update_agent(main_agent)
+            
+            self.agent_session.history.add_message(
+                role="system",
+                content="You have just taken over the conversation back from the Returns Specialist. Acknowledge this and ask how else you can help."
+            )
+            try:
+                self.agent_session.tts.update_options(voice="Anisha")
+            except Exception as e:
+                logger.warning(f"Could not switch TTS voice: {e}")
+                
+            try:
+                import json
+                from livekit.agents import get_job_context
+                ctx = get_job_context()
+                await ctx.room.local_participant.publish_data(
+                    payload=json.dumps({"type": "specialist_left", "message": "specialist left the chat"}).encode("utf-8"),
+                    topic="chat"
+                )
+            except Exception as e:
+                logger.error(f"Error publishing specialist left data: {e}")
+                
+            return "Transferred back to Main Assistant successfully."
+        return "Failed to transfer."
+
+
+
 server = AgentServer()
 
 
@@ -366,6 +451,7 @@ async def my_agent(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
+    assistant.agent_session = session
 
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(ev: UserInputTranscribedEvent):
