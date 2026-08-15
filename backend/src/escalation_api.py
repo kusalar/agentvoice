@@ -31,7 +31,7 @@ from escalations import (
     list_escalations,
     update_escalation_status,
 )
-from db import get_call_stats, get_recent_calls
+from db import get_call_stats, get_recent_calls, clear_call_logs, seed_demo_calls
 
 logger = logging.getLogger("escalation_api")
 logging.basicConfig(level=logging.INFO)
@@ -112,6 +112,22 @@ def get_call_statistics():
 def get_call_history(limit: int = Query(default=10, le=100)):
     """Retrieve recent call history."""
     return get_recent_calls(limit=limit)
+
+
+@app.post("/api/calls/reset")
+@app.delete("/api/calls")
+def reset_call_data():
+    """Clear all call records from database."""
+    clear_call_logs()
+    return {"success": True, "message": "All call records successfully removed."}
+
+
+@app.post("/api/calls/seed-demo")
+def seed_demo_data():
+    """Populate database with 4 success and 2 failed categorized calls."""
+    seed_demo_calls()
+    return {"success": True, "message": "Demo data populated (4 success, 2 failed calls)."}
+
 
 
 @app.get("/api/escalations")
