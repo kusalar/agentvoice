@@ -6,6 +6,41 @@ Build a production voice AI agent in 5 minutes. Powered by the fastest TTS on th
 
 ---
 
+## Day 5 — Live Catalogue & Stock Lookup Tool
+
+### What the tool does
+
+The agent has a dedicated `lookup_product` tool it calls **automatically** whenever a caller asks about a product's price, stock, or availability — in English, Hindi, or Bengali — **without being told to**.
+
+### Data source
+
+| Layer | Source | Auth required |
+|---|---|---|
+| **Primary (live)** | [Open Food Facts API](https://world.openfoodfacts.org/) — a free, open, community-maintained global food database | ❌ None |
+| **Fallback (local)** | Hand-built dataset of 6 Indian local-commerce products in `backend/src/catalogue.py` | N/A |
+
+> **Data is live.** Every product query hits the Open Food Facts API in real time (5-second timeout). Prices always come from the local store catalogue because Open Food Facts does not carry Indian retail prices.
+
+### When the data is from
+
+Every response includes a `fetched_at` UTC timestamp. The agent speaks it naturally:
+- ✅ *"I just checked — as of 09:15 UTC today, we have organic honey in stock at ₹450."*
+- ✅ *"Our live catalogue is temporarily unavailable, so I'm going by our most recent local records from this morning."*
+
+### Failure path (graceful fallback)
+
+If the Open Food Facts API is unreachable (timeout, HTTP error, network drop):
+1. The agent detects the failure in `fetch_product_from_api()` — **no exception propagates**
+2. It falls back to the local hand-built catalogue automatically
+3. It tells the caller **out loud**: *"Our live catalogue is temporarily unavailable right now, but based on our local records…"*
+4. It **never goes silent** and **never hallucinates** a price — if the product isn't in the local catalogue either, it says so clearly
+
+### Tool description (why it fires at the right moment)
+
+The tool docstring lists trigger patterns across all three languages. The system prompt contains a mandatory rule: **"Do NOT answer product/price questions from memory alone — always call this tool first."** This prevents the model from guessing prices from its training data.
+
+---
+
 ## Why Murf Falcon
 
 - **55ms model latency** - fastest production TTS

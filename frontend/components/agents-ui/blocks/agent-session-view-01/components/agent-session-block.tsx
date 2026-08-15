@@ -2,13 +2,16 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, type MotionProps, motion } from 'motion/react';
-import { useAgent, useSessionContext, useSessionMessages } from '@livekit/components-react';
+import { useAgent, useSessionContext, useSessionMessages, useDataChannel } from '@livekit/components-react';
+import type { ReceivedMessage } from '@livekit/components-react';
 import { AgentChatTranscript } from '@/components/agents-ui/agent-chat-transcript';
 import {
   AgentControlBar,
   type AgentControlBarControls,
 } from '@/components/agents-ui/agent-control-bar';
 import { Shimmer } from '@/components/ai-elements/shimmer';
+import { SpeakerIndicator } from '@/components/app/speaker-indicator';
+import type { DisplayAgentState } from '@/hooks/useAgentState';
 import { cn } from '@/lib/shadcn/utils';
 import { TileLayout } from './tile-view';
 
@@ -151,6 +154,10 @@ export interface AgentSessionView_01Props {
   audioVisualizerRadialRadius?: number;
   /** Stroke width of the wave path when `audioVisualizerType` is `wave`. */
   audioVisualizerWaveLineWidth?: number;
+  /** Current display state of the agent */
+  displayState?: DisplayAgentState;
+  /** Optional device error handler */
+  onDeviceError?: (error: { source: any; error: Error }) => void;
   /** Optional class name merged onto the outer `<section>` container. */
   className?: string;
 }
@@ -171,15 +178,45 @@ export function AgentSessionView_01({
   audioVisualizerRadialBarCount,
   audioVisualizerRadialRadius,
   audioVisualizerWaveLineWidth,
+  displayState,
+  onDeviceError,
   ref,
   className,
   ...props
 }: React.ComponentProps<'section'> & AgentSessionView_01Props) {
   const session = useSessionContext();
   const { messages } = useSessionMessages(session);
+  const [extraMessages, setExtraMessages] = useState<ReceivedMessage[]>([]);
+  const { message: dataChannelMessage } = useDataChannel('chat');
+
+  useEffect(() => {
+    if (dataChannelMessage) {
+      try {
+        const data = JSON.parse(new TextDecoder().decode(dataChannelMessage.payload));
+        if (data.type === 'specialist_joined' || data.type === 'specialist_left') {
+          setExtraMessages((prev) => [
+            ...prev,
+            {
+              id: `sys-${Date.now()}`,
+              timestamp: Date.now(),
+              message: data.message,
+            } as ReceivedMessage,
+          ]);
+        }
+      } catch (e) {
+        console.error('Failed to parse data channel message', e);
+      }
+    }
+  }, [dataChannelMessage]);
+
+  const allMessages = [...messages, ...extraMessages].sort((a, b) => a.timestamp - b.timestamp);
+
   const [chatOpen, setChatOpen] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { state: agentState } = useAgent();
+
+  const activeSpeakerState: DisplayAgentState =
+    displayState || (agentState === 'speaking' ? 'speaking' : 'listening');
 
   const controls: AgentControlBarControls = {
     leave: true,
@@ -205,6 +242,11 @@ export function AgentSessionView_01({
       {...props}
     >
       <Fade top className="absolute inset-x-4 top-0 z-10 h-40" />
+
+      {/* Speaker Indicator Header */}
+      <div className="absolute top-4 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 px-4 md:top-6">
+        <SpeakerIndicator state={activeSpeakerState} />
+      </div>
       {/* transcript */}
 
       <div className="absolute top-0 bottom-[135px] flex w-full flex-col md:bottom-[170px]">
@@ -216,7 +258,7 @@ export function AgentSessionView_01({
             >
               <AgentChatTranscript
                 agentState={agentState}
-                messages={messages}
+                messages={allMessages}
                 className="mx-auto w-full max-w-2xl [&_.is-user>div]:rounded-[22px] [&>div>div]:px-4 [&>div>div]:pt-40 md:[&>div>div]:px-6"
               />
             </motion.div>
@@ -265,6 +307,7 @@ export function AgentSessionView_01({
             isChatOpen={chatOpen}
             isConnected={session.isConnected}
             onDisconnect={session.end}
+            onDeviceError={onDeviceError}
             onIsChatOpenChange={setChatOpen}
           />
         </div>

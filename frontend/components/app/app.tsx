@@ -9,6 +9,7 @@ import { AgentSessionProvider } from '@/components/agents-ui/agent-session-provi
 import { StartAudioButton } from '@/components/agents-ui/start-audio-button';
 import { ViewController } from '@/components/app/view-controller';
 import { Toaster } from '@/components/ui/sonner';
+import Link from 'next/link';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
 import { useDebugMode } from '@/hooks/useDebug';
 import { getSandboxTokenSource } from '@/lib/utils';
@@ -41,7 +42,15 @@ export function App({ appConfig }: AppProps) {
   return (
     <AgentSessionProvider session={session}>
       <AppSetup />
-      <main className="grid h-svh grid-cols-1 place-content-center">
+      <main className="grid h-svh grid-cols-1 place-content-center relative">
+        <div className="absolute top-4 right-4 z-50">
+          <Link 
+            href="/dashboard" 
+            className="px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-lg text-sm text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors shadow-sm font-medium"
+          >
+            Analytics Dashboard
+          </Link>
+        </div>
         <ViewController appConfig={appConfig} />
       </main>
       <StartAudioButton label="Start Audio" />
