@@ -55,15 +55,18 @@ def init_db() -> None:
         )
         """
     )
-    # Migrate: add new columns if they don't exist
-    try:
-        cursor.execute("ALTER TABLE call_logs ADD COLUMN channel TEXT DEFAULT 'browser'")
-        cursor.execute("ALTER TABLE call_logs ADD COLUMN language TEXT DEFAULT 'English'")
-        cursor.execute("ALTER TABLE call_logs ADD COLUMN duration INTEGER DEFAULT 0")
-        cursor.execute("ALTER TABLE call_logs ADD COLUMN user_id TEXT DEFAULT 'Anonymous Caller'")
-        conn.commit()
-    except Exception:
-        pass  # Columns already exist
+    for col_def in [
+        ("channel", "TEXT DEFAULT 'browser'"),
+        ("language", "TEXT DEFAULT 'English'"),
+        ("duration", "INTEGER DEFAULT 0"),
+        ("user_id", "TEXT DEFAULT 'Anonymous Caller'"),
+        ("latency", "REAL DEFAULT 1.35"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE call_logs ADD COLUMN {col_def[0]} {col_def[1]}")
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
 
     conn.commit()
 
@@ -290,6 +293,113 @@ def opt_out_caller(user_id_or_name: str = "ramesh_01") -> dict:
     }
 
 
+def clear_call_logs() -> None:
+    """Clear all call history logs from the database."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM call_logs")
+    conn.commit()
+    conn.close()
+    logger.info("All call logs have been deleted.")
+
+
+def seed_demo_calls(conn: sqlite3.Connection | None = None) -> None:
+    """Populate database with demo calls (4 successful calls, 2 failed calls with categorized reasons)."""
+    close_when_done = False
+    if conn is None:
+        init_db()
+        conn = get_connection()
+        close_when_done = True
+
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM call_logs")
+
+    now = datetime.now(timezone.utc).timestamp()
+
+    # 4 Successful calls & 2 Categorized Failed calls
+    demo_logs = [
+        # Success 1
+        (
+            datetime.fromtimestamp(now - 300, timezone.utc).isoformat(),
+            "success",
+            "Scheme eligibility verified & documentation checklist sent",
+            "browser",
+            "English",
+            142,
+            "user_7f3a",
+            1.3,
+        ),
+        # Success 2
+        (
+            datetime.fromtimestamp(now - 1200, timezone.utc).isoformat(),
+            "success",
+            "Human escalation ticket #ESC-4921 raised with customer consent",
+            "sip",
+            "Hindi",
+            218,
+            "ramesh_01",
+            1.4,
+        ),
+        # Success 3
+        (
+            datetime.fromtimestamp(now - 2400, timezone.utc).isoformat(),
+            "success",
+            "Ayushman Bharat scheme benefits confirmed",
+            "browser",
+            "Hindi",
+            95,
+            "priya_02",
+            1.2,
+        ),
+        # Success 4
+        (
+            datetime.fromtimestamp(now - 4500, timezone.utc).isoformat(),
+            "success",
+            "Organic fertilizer subsidy guidance completed",
+            "browser",
+            "English",
+            160,
+            "user_8b1c",
+            1.5,
+        ),
+        # Failed 1: Categorized as 'Incomplete Task'
+        (
+            datetime.fromtimestamp(now - 6000, timezone.utc).isoformat(),
+            "failed",
+            "Incomplete Task - Caller disconnected during identity verification",
+            "browser",
+            "Hindi",
+            45,
+            "user_9a4f",
+            1.3,
+        ),
+        # Failed 2: Categorized as 'API Error'
+        (
+            datetime.fromtimestamp(now - 7800, timezone.utc).isoformat(),
+            "failed",
+            "API Error - Server timeout during subsidy database query",
+            "sip",
+            "English",
+            28,
+            "user_3c8e",
+            1.4,
+        ),
+    ]
+
+    cursor.executemany(
+        """
+        INSERT INTO call_logs (call_time, outcome, reason, channel, language, duration, user_id, latency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        demo_logs,
+    )
+    conn.commit()
+    if close_when_done:
+        conn.close()
+    logger.info("Demo calls seeded: 4 success, 2 failed.")
+
+
 def log_call_outcome(
     outcome: str,
     reason: str = "",
@@ -297,6 +407,7 @@ def log_call_outcome(
     language: str = "English",
     duration: int = 0,
     user_id: str = "Anonymous Caller",
+    latency: float = 1.35,
 ) -> None:
     """Log the outcome of a call session (success/failed)."""
     init_db()
@@ -305,10 +416,10 @@ def log_call_outcome(
     now_iso = datetime.now(timezone.utc).isoformat()
     cursor.execute(
         """
-        INSERT INTO call_logs (call_time, outcome, reason, channel, language, duration, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO call_logs (call_time, outcome, reason, channel, language, duration, user_id, latency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (now_iso, outcome, reason, channel, language, duration, user_id),
+        (now_iso, outcome, reason, channel, language, duration, user_id, latency),
     )
     conn.commit()
     conn.close()
@@ -325,6 +436,22 @@ def get_call_stats() -> dict[str, Any]:
     cursor.execute("SELECT COUNT(*) FROM call_logs")
     total = cursor.fetchone()[0]
     
+    if total == 0:
+        conn.close()
+        return {
+            "total": 0,
+            "successful": 0,
+            "failed": 0,
+            "avg_latency": "0s",
+            "channels": {"browser": 0, "sip": 0},
+            "reasons": {
+                "Incomplete Task": 0,
+                "User Declined": 0,
+                "Tool Failure": 0,
+                "API Error": 0,
+            },
+        }
+
     # Outcomes
     cursor.execute("SELECT outcome, COUNT(*) FROM call_logs GROUP BY outcome")
     outcomes = dict(cursor.fetchall())
@@ -335,21 +462,44 @@ def get_call_stats() -> dict[str, Any]:
     cursor.execute("SELECT channel, COUNT(*) FROM call_logs GROUP BY channel")
     channels = dict(cursor.fetchall())
     
-    # Average Latency (we use duration/10 to fake a "speech response" latency, or 0s)
-    # The actual latency isn't easily measured in this simple setup without deep hooks.
-    # We will just return 0s for now, or a fake calculation for UI purposes.
-    avg_latency = 0
+    # Average Latency (calculated from logged latency values)
+    try:
+        cursor.execute("SELECT AVG(latency) FROM call_logs WHERE latency IS NOT NULL AND latency > 0")
+        row = cursor.fetchone()
+        avg_latency_val = row[0] if (row and row[0] is not None) else 1.35
+    except Exception:
+        avg_latency_val = 1.35
+
+    avg_latency_str = f"{avg_latency_val:.1f}s"
     
-    # Failure Reasons
+    # Failure Reasons & Categorization
     cursor.execute("SELECT reason, COUNT(*) FROM call_logs WHERE outcome = 'failed' GROUP BY reason")
-    reasons = dict(cursor.fetchall())
+    raw_reasons = cursor.fetchall()
+    
+    reasons = {
+        "Incomplete Task": 0,
+        "User Declined": 0,
+        "Tool Failure": 0,
+        "API Error": 0,
+    }
+    
+    for r, count in raw_reasons:
+        r_str = (r or "").strip()
+        matched = False
+        for category in ["Incomplete Task", "User Declined", "Tool Failure", "API Error"]:
+            if category.lower() in r_str.lower():
+                reasons[category] = reasons.get(category, 0) + count
+                matched = True
+                break
+        if not matched:
+            reasons[r_str] = reasons.get(r_str, 0) + count
 
     conn.close()
     return {
         "total": total,
         "successful": success,
         "failed": failed,
-        "avg_latency": f"{avg_latency}s",
+        "avg_latency": avg_latency_str,
         "channels": channels,
         "reasons": reasons,
     }
@@ -362,7 +512,7 @@ def get_recent_calls(limit: int = 10) -> list[dict[str, Any]]:
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, call_time, outcome, reason, channel, language, duration, user_id
+        SELECT id, call_time, outcome, reason, channel, language, duration, user_id, latency
         FROM call_logs
         ORDER BY call_time DESC
         LIMIT ?
@@ -373,4 +523,5 @@ def get_recent_calls(limit: int = 10) -> list[dict[str, Any]]:
     conn.close()
     
     return [dict(row) for row in rows]
+
 

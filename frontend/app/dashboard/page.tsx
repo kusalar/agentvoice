@@ -23,19 +23,18 @@ type CallHistory = {
   user_id: string;
 };
 
-// ─── Realistic seed data shown when the DB is empty ──────────────────────────
+// ─── Realistic seed data shown when the DB is empty (4 Success, 2 Failed) ───
 const SEED_STATS: CallStats = {
-  total: 5,
-  successful: 2,
-  failed: 3,
-  avg_latency: '1.4s',
-  channels: { browser: 3, sip: 2 },
+  total: 6,
+  successful: 4,
+  failed: 2,
+  avg_latency: '1.3s',
+  channels: { browser: 4, sip: 2 },
   reasons: {
     'Incomplete Task': 1,
+    'API Error': 1,
     'User Declined': 0,
     'Tool Failure': 0,
-    'API Error': 0,
-    'Caller disconnected before a goal was reached.': 2,
   },
 };
 
@@ -44,7 +43,7 @@ const SEED_HISTORY: CallHistory[] = [
     id: 1,
     call_time: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
     outcome: 'success',
-    reason: 'Scheme lookup completed',
+    reason: 'Scheme eligibility verified & documentation checklist sent',
     channel: 'browser',
     language: 'English',
     duration: 142,
@@ -52,42 +51,52 @@ const SEED_HISTORY: CallHistory[] = [
   },
   {
     id: 2,
-    call_time: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    outcome: 'failed',
-    reason: 'Caller disconnected before a goal was reached.',
+    call_time: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+    outcome: 'success',
+    reason: 'Human escalation ticket #ESC-4921 raised with customer consent',
     channel: 'sip',
     language: 'Hindi',
-    duration: 34,
-    user_id: 'user_2b9c',
+    duration: 218,
+    user_id: 'ramesh_01',
   },
   {
     id: 3,
-    call_time: new Date(Date.now() - 1000 * 60 * 42).toISOString(),
+    call_time: new Date(Date.now() - 1000 * 60 * 40).toISOString(),
     outcome: 'success',
-    reason: 'Escalation ticket raised',
+    reason: 'Ayushman Bharat scheme benefits confirmed',
     channel: 'browser',
-    language: 'English',
-    duration: 218,
-    user_id: 'user_5e1d',
+    language: 'Hindi',
+    duration: 95,
+    user_id: 'priya_02',
   },
   {
     id: 4,
     call_time: new Date(Date.now() - 1000 * 60 * 75).toISOString(),
-    outcome: 'failed',
-    reason: 'Incomplete Task',
+    outcome: 'success',
+    reason: 'Organic fertilizer subsidy guidance completed',
     channel: 'browser',
-    language: 'Hindi',
-    duration: 61,
-    user_id: 'user_9a4f',
+    language: 'English',
+    duration: 160,
+    user_id: 'user_8b1c',
   },
   {
     id: 5,
-    call_time: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+    call_time: new Date(Date.now() - 1000 * 60 * 100).toISOString(),
     outcome: 'failed',
-    reason: 'Caller disconnected before a goal was reached.',
+    reason: 'Incomplete Task - Caller disconnected during identity verification',
+    channel: 'browser',
+    language: 'Hindi',
+    duration: 45,
+    user_id: 'user_9a4f',
+  },
+  {
+    id: 6,
+    call_time: new Date(Date.now() - 1000 * 60 * 130).toISOString(),
+    outcome: 'failed',
+    reason: 'API Error - Server timeout during subsidy database query',
     channel: 'sip',
     language: 'English',
-    duration: 22,
+    duration: 28,
     user_id: 'user_3c8e',
   },
 ];
@@ -98,6 +107,7 @@ export default function DashboardPage() {
   const [history, setHistory] = useState<CallHistory[]>(SEED_HISTORY);
   const [loading, setLoading] = useState(true);
   const [usingLive, setUsingLive] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   // Filters
   const [filterChannel, setFilterChannel] = useState('All');
@@ -114,7 +124,6 @@ export default function DashboardPage() {
       if (statsRes.ok && historyRes.ok) {
         const liveStats: CallStats = await statsRes.json();
         const liveHistory: CallHistory[] = await historyRes.json();
-        // Always apply live data when the backend responds — even if DB is empty
         setStats(liveStats);
         setHistory(liveHistory);
         setUsingLive(true);
@@ -132,11 +141,42 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  // Clear log — reset to seed data so something realistic is always shown
-  const handleClearLog = () => {
-    setHistory(SEED_HISTORY);
-    setStats(SEED_STATS);
-    setUsingLive(false);
+  // Reset all call data — completely removes all logs from backend DB and clears dashboard
+  const handleResetAllData = async () => {
+    setIsResetting(true);
+    try {
+      await fetch(`${API_BASE}/api/calls/reset`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to reset backend data:', err);
+    }
+    setStats({
+      total: 0,
+      successful: 0,
+      failed: 0,
+      avg_latency: '0s',
+      channels: { browser: 0, sip: 0 },
+      reasons: {
+        'Incomplete Task': 0,
+        'User Declined': 0,
+        'Tool Failure': 0,
+        'API Error': 0,
+      },
+    });
+    setHistory([]);
+    setUsingLive(true);
+    setIsResetting(false);
+  };
+
+  // Seed demo data with 4 success and 2 failed calls
+  const handleLoadDemoData = async () => {
+    try {
+      await fetch(`${API_BASE}/api/calls/seed-demo`, { method: 'POST' });
+      await fetchData();
+    } catch (err) {
+      console.error('Failed to seed demo data:', err);
+      setStats(SEED_STATS);
+      setHistory(SEED_HISTORY);
+    }
   };
 
   // Filter history
@@ -183,7 +223,7 @@ export default function DashboardPage() {
         <Link href="/dashboard" className="text-[#f0a842] border-b-2 border-[#f0a842] uppercase tracking-widest text-xs py-2">Call Dashboard</Link>
         {!usingLive && !loading && (
           <span className="ml-auto text-[10px] bg-amber-500/20 text-amber-300 border border-amber-400/40 px-3 py-1 rounded-full font-medium tracking-wide">
-            ⚡ Demo Data — Connect Backend for Live Stats
+            ⚡ Demo Mode Active
           </span>
         )}
       </nav>
@@ -202,19 +242,31 @@ export default function DashboardPage() {
           </div>
           <div className="flex gap-3">
             <button
-              id="btn-clear-log"
-              onClick={handleClearLog}
-              className="text-rose-500 hover:bg-rose-50 px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 border border-rose-200 transition-colors"
+              id="btn-seed-demo"
+              onClick={handleLoadDemoData}
+              title="Populate 4 Success & 2 Failed Calls"
+              className="text-indigo-600 hover:bg-indigo-50 px-3 py-2 rounded-md font-medium text-xs flex items-center gap-1.5 border border-indigo-200 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+              </svg>
+              Demo Data (4S / 2F)
+            </button>
+            <button
+              id="btn-reset-data"
+              onClick={handleResetAllData}
+              disabled={isResetting}
+              className="text-rose-600 hover:bg-rose-50 px-3 py-2 rounded-md font-medium text-xs flex items-center gap-1.5 border border-rose-200 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
               </svg>
-              Clear Log
+              Reset All Data
             </button>
             <button
               id="btn-refresh"
               onClick={fetchData}
-              className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 border border-blue-200 transition-colors"
+              className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-md font-medium text-xs flex items-center gap-1.5 border border-blue-200 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -224,7 +276,7 @@ export default function DashboardPage() {
             <a
               id="btn-start-call"
               href="http://localhost:3000/"
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-md font-medium text-sm flex items-center gap-2 shadow-sm transition-colors"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md font-medium text-xs flex items-center gap-1.5 shadow-sm transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
